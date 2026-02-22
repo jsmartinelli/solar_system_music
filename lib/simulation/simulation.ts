@@ -1,23 +1,25 @@
 'use client';
 
-import type { Star, Planet, SolarSystem } from '@/types/celestial';
+import type { Star, Planet, Satellite, SolarSystem } from '@/types/celestial';
 import type { SceneObject } from '@/lib/rendering/renderer';
 import { createPhysicsEngine, addBody, removeBody, setTimeScale, setGravityStrength } from '@/lib/physics/engine';
 import type { PhysicsEngine } from '@/lib/physics/engine';
-import { createLoopState, saveInitialState, rewindToStart, pauseLoop, resumeLoop } from '@/lib/physics/loop';
+import { createLoopState, saveInitialState, rewindToStart, pauseLoop, resumeLoop, applyGravity } from '@/lib/physics/loop';
 import type { PhysicsLoopState, GravitySource } from '@/lib/physics/loop';
-import { applyGravity } from '@/lib/physics/loop';
 import Matter from 'matter-js';
 import { createSynthManager, addSynth, triggerNote, disposeAll, getSynthCount, removeSynth } from '@/lib/audio/synthManager';
 import type { SynthManager, SynthType } from '@/lib/audio/synthManager';
 import { setBpm } from '@/lib/audio/context';
 import { createStar } from '@/lib/entities/star';
 import type { CreateStarOptions } from '@/lib/entities/star';
-import { createPlanet, updatePlanet, getCurrentNote, MAX_PLANETS } from '@/lib/entities/planet';
+import { createPlanet, updatePlanet, MAX_PLANETS } from '@/lib/entities/planet';
 import type { CreatePlanetOptions } from '@/lib/entities/planet';
+import { createSatellite, updateSatellite, decayPulse, MAX_SATELLITES } from '@/lib/entities/satellite';
+import type { CreateSatelliteOptions } from '@/lib/entities/satellite';
 import { planetRadiusFromMass } from '@/lib/rendering/renderer';
 import { noteDurationToSeconds } from '@/utils/audio';
 import { setupCollisions } from '@/lib/physics/collisions';
+import { getCurrentNote } from '@/lib/entities/planet';
 
 export interface SimulationState {
   solarSystem: SolarSystem;
@@ -25,6 +27,8 @@ export interface SimulationState {
   loopState: PhysicsLoopState;
   synthManager: SynthManager;
   lastTimestamp: number;
+  /** Per-satellite trigger pulse values (0–1), keyed by satellite id */
+  triggerPulses: Map<string, number>;
 }
 
 /**
@@ -42,6 +46,7 @@ export function createSimulation(): SimulationState {
     loopState,
     synthManager,
     lastTimestamp: 0,
+    triggerPulses: new Map(),
     solarSystem: {
       star: null,
       planets: [],
@@ -55,13 +60,11 @@ export function createSimulation(): SimulationState {
 
 /**
  * Adds a star to the simulation. Only one star is supported.
- * Adds its physics body to the world and updates the BPM transport.
  */
 export function addStar(
   sim: SimulationState,
   options: CreateStarOptions = {}
 ): SimulationState {
-  // Remove previous star if one exists
   const prev = sim.solarSystem.star;
   if (prev?.physicsBody) {
     removeBody(sim.physicsEngine, prev.physicsBody);
@@ -82,7 +85,6 @@ export function addStar(
 
 /**
  * Adds a planet to the simulation (max 20).
- * Creates a synth instance for it and adds its physics body.
  */
 export function addPlanet(
   sim: SimulationState,
@@ -115,7 +117,7 @@ export function addPlanet(
 }
 
 /**
- * Removes a planet from the simulation, disposing its synth and physics body.
+ * Removes a planet and all its satellites from the simulation.
  */
 export function removePlanet(
   sim: SimulationState,
@@ -127,8 +129,17 @@ export function removePlanet(
   if (planet.physicsBody) removeBody(sim.physicsEngine, planet.physicsBody);
   removeSynth(sim.synthManager, planetId);
 
+  // Clean up pulse entries for orphaned satellites
+  const removedSatelliteIds = sim.solarSystem.satellites
+    .filter((s) => s.parentPlanetId === planetId)
+    .map((s) => s.id);
+
+  const newPulses = new Map(sim.triggerPulses);
+  for (const id of removedSatelliteIds) newPulses.delete(id);
+
   return {
     ...sim,
+    triggerPulses: newPulses,
     solarSystem: {
       ...sim.solarSystem,
       planets: sim.solarSystem.planets.filter((p) => p.id !== planetId),
@@ -140,13 +151,72 @@ export function removePlanet(
 }
 
 /**
- * Advances the simulation by one tick.
- * - Applies gravity
- * - Steps the physics engine
- * - Updates all planet entities (revolution tracking, note advancement)
- * - Triggers audio for planets that completed a revolution
+ * Adds a satellite to a planet (max 100 total across all planets).
  *
- * Returns updated simulation state (planets array is replaced, not mutated).
+ * @param sim - Current simulation state
+ * @param options - Satellite creation options (parentPlanetId, orbitRadius, startAngle)
+ */
+export function addSatellite(
+  sim: SimulationState,
+  options: Omit<CreateSatelliteOptions, 'parentPosition'>
+): SimulationState {
+  if (sim.solarSystem.satellites.length >= MAX_SATELLITES) {
+    console.warn('Satellite limit reached (100)');
+    return sim;
+  }
+
+  const planet = sim.solarSystem.planets.find(
+    (p) => p.id === options.parentPlanetId
+  );
+  if (!planet) {
+    console.warn(`Planet ${options.parentPlanetId} not found`);
+    return sim;
+  }
+
+  const satellite = createSatellite({
+    ...options,
+    parentPosition: planet.position,
+  });
+
+  return {
+    ...sim,
+    solarSystem: {
+      ...sim.solarSystem,
+      satellites: [...sim.solarSystem.satellites, satellite],
+    },
+  };
+}
+
+/**
+ * Removes a satellite from the simulation.
+ */
+export function removeSatellite(
+  sim: SimulationState,
+  satelliteId: string
+): SimulationState {
+  const newPulses = new Map(sim.triggerPulses);
+  newPulses.delete(satelliteId);
+
+  return {
+    ...sim,
+    triggerPulses: newPulses,
+    solarSystem: {
+      ...sim.solarSystem,
+      satellites: sim.solarSystem.satellites.filter(
+        (s) => s.id !== satelliteId
+      ),
+    },
+  };
+}
+
+/**
+ * Advances the simulation by one tick:
+ * 1. Applies gravity forces
+ * 2. Steps the physics engine
+ * 3. Updates planets (revolution tracking, note advancement)
+ * 4. Updates satellites (orbit position, 12 o'clock trigger detection)
+ * 5. Fires audio for triggered satellites
+ * 6. Decays trigger pulse values
  */
 export function tickSimulation(
   sim: SimulationState,
@@ -154,10 +224,11 @@ export function tickSimulation(
 ): SimulationState {
   if (!sim.solarSystem.isPlaying) return sim;
 
-  const { star, planets } = sim.solarSystem;
+  const { star, planets, satellites } = sim.solarSystem;
   if (!star) return sim;
 
-  // Build gravity sources: star + all planets
+  // ── Physics ──────────────────────────────────────────────────────────────
+
   const gravitySources: GravitySource[] = [];
   if (star.physicsBody) {
     gravitySources.push({ body: star.physicsBody, mass: star.mass });
@@ -174,7 +245,8 @@ export function tickSimulation(
     deltaMs * sim.solarSystem.timeScale
   );
 
-  // Update each planet and trigger audio if note advanced
+  // ── Update planets ────────────────────────────────────────────────────────
+
   const updatedPlanets: Planet[] = [];
 
   for (const planet of planets) {
@@ -192,11 +264,54 @@ export function tickSimulation(
     updatedPlanets.push(updated);
   }
 
+  // ── Update satellites ─────────────────────────────────────────────────────
+
+  const updatedSatellites: Satellite[] = [];
+  const newPulses = new Map(sim.triggerPulses);
+
+  for (const satellite of satellites) {
+    const parentPlanet = updatedPlanets.find(
+      (p) => p.id === satellite.parentPlanetId
+    );
+
+    if (!parentPlanet) {
+      updatedSatellites.push(satellite);
+      continue;
+    }
+
+    const { satellite: updated, triggered, triggerVolume } = updateSatellite(
+      satellite,
+      parentPlanet.position,
+      deltaMs
+    );
+
+    if (triggered) {
+      // Fire the parent planet's current note
+      const note = getCurrentNote(parentPlanet, star);
+      if (note) {
+        const durSec = noteDurationToSeconds(parentPlanet.rotationSpeed, star.bpm);
+        triggerNote(sim.synthManager, parentPlanet.id, note, durSec, triggerVolume);
+      }
+      // Set pulse to 1 for visual flash
+      newPulses.set(updated.id, 1);
+    } else {
+      // Decay existing pulse
+      const prev = newPulses.get(updated.id) ?? 0;
+      if (prev > 0) {
+        newPulses.set(updated.id, decayPulse(prev, deltaMs));
+      }
+    }
+
+    updatedSatellites.push(updated);
+  }
+
   return {
     ...sim,
+    triggerPulses: newPulses,
     solarSystem: {
       ...sim.solarSystem,
       planets: updatedPlanets,
+      satellites: updatedSatellites,
     },
   };
 }
@@ -264,7 +379,8 @@ export function setSimulationGravity(
 }
 
 /**
- * Converts simulation state to a flat array of SceneObjects for rendering.
+ * Converts simulation state to a flat SceneObject array for the renderer.
+ * Includes trigger pulse values for satellite highlight animation.
  */
 export function simulationToSceneObjects(sim: SimulationState): {
   objects: SceneObject[];
@@ -297,7 +413,8 @@ export function simulationToSceneObjects(sim: SimulationState): {
     objects.push({
       type: 'satellite',
       position: satellite.position,
-      radius: 3,
+      radius: SATELLITE_VISUAL_RADIUS,
+      triggerPulse: sim.triggerPulses.get(satellite.id) ?? 0,
       orbitCenter: parentPlanet?.position,
       orbitRadius: satellite.orbitRadius,
     });
@@ -309,8 +426,10 @@ export function simulationToSceneObjects(sim: SimulationState): {
   };
 }
 
+const SATELLITE_VISUAL_RADIUS = 3;
+
 /**
- * Cleans up all resources: disposes synths, clears physics world.
+ * Cleans up all resources.
  */
 export function destroySimulation(sim: SimulationState): void {
   disposeAll(sim.synthManager);
@@ -323,6 +442,13 @@ export function destroySimulation(sim: SimulationState): void {
  */
 export function getPlanetCount(sim: SimulationState): number {
   return sim.solarSystem.planets.length;
+}
+
+/**
+ * Returns the number of active satellites.
+ */
+export function getSatelliteCount(sim: SimulationState): number {
+  return sim.solarSystem.satellites.length;
 }
 
 /**

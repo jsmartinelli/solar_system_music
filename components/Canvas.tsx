@@ -14,6 +14,7 @@ import {
   createSimulation,
   addStar,
   addPlanet,
+  addSatellite,
   playSimulation,
   pauseSimulation,
   tickSimulation,
@@ -36,9 +37,19 @@ function buildDefaultSimulation(): SimulationState {
 
   sim = addStar(sim, { x: 0, y: 0, bpm: 100, key: 'C', mode: 'Ionian' });
 
-  sim = addPlanet(sim, { x: 150, y: 0, mass: 80,  rotationSpeed: 'quarter',   noteSequence: 'I4 III4 V4',     synthType: 'Synth'    });
-  sim = addPlanet(sim, { x: 240, y: 0, mass: 150, rotationSpeed: 'eighth',    noteSequence: 'V3 VII3 II4',    synthType: 'AMSynth'  });
+  sim = addPlanet(sim, { x: 150, y: 0, mass: 80,  rotationSpeed: 'quarter',   noteSequence: 'I4 III4 V4',     synthType: 'Synth'      });
+  sim = addPlanet(sim, { x: 240, y: 0, mass: 150, rotationSpeed: 'eighth',    noteSequence: 'V3 VII3 II4',    synthType: 'AMSynth'    });
   sim = addPlanet(sim, { x: 340, y: 0, mass: 50,  rotationSpeed: 'sixteenth', noteSequence: 'I5 VI4 III5 V4', synthType: 'PluckSynth' });
+
+  // Add satellites — each orbits its parent planet at a different radius
+  const p1 = sim.solarSystem.planets[0].id;
+  const p2 = sim.solarSystem.planets[1].id;
+  const p3 = sim.solarSystem.planets[2].id;
+
+  sim = addSatellite(sim, { parentPlanetId: p1, orbitRadius: 30, startAngle: 0 });
+  sim = addSatellite(sim, { parentPlanetId: p1, orbitRadius: 48, startAngle: Math.PI });
+  sim = addSatellite(sim, { parentPlanetId: p2, orbitRadius: 35, startAngle: Math.PI / 2 });
+  sim = addSatellite(sim, { parentPlanetId: p3, orbitRadius: 25, startAngle: Math.PI * 1.5 });
 
   return sim;
 }
