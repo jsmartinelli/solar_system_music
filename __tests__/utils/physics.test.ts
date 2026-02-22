@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   G,
+  PHYSICS_DELTA_MS,
   circularOrbitSpeed,
   circularOrbitVelocity,
   gravitationalForce,
@@ -26,7 +27,9 @@ describe('circularOrbitSpeed', () => {
   it('returns correct speed for given mass and radius', () => {
     const mass = 10000;
     const radius = 100;
-    const expected = Math.sqrt((G * mass) / radius);
+    // Matter.js Verlet: Δv = force/mass * delta_ms², so orbital speed must
+    // include the PHYSICS_DELTA_MS factor for the centripetal balance to hold.
+    const expected = Math.sqrt((G * mass) / radius) * PHYSICS_DELTA_MS;
     expect(circularOrbitSpeed(mass, radius)).toBeCloseTo(expected, 10);
   });
 

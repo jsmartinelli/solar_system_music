@@ -239,11 +239,18 @@ export function tickSimulation(
     }
   }
 
-  applyGravity(sim.physicsEngine, gravitySources, sim.solarSystem.gravityStrength);
-  Matter.Engine.update(
-    sim.physicsEngine.engine,
-    deltaMs * sim.solarSystem.timeScale
-  );
+  // Use fixed sub-steps to keep orbital physics stable regardless of frame rate.
+  // A variable deltaMs causes the gravity impulse to be over/under-applied
+  // relative to the orbital velocity, which destabilises orbits.
+  const FIXED_STEP_MS = 1000 / 60; // ~16.67 ms
+  const scaledDelta = deltaMs * sim.solarSystem.timeScale;
+  const steps = Math.max(1, Math.round(scaledDelta / FIXED_STEP_MS));
+  const stepMs = scaledDelta / steps;
+
+  for (let i = 0; i < steps; i++) {
+    applyGravity(sim.physicsEngine, gravitySources, sim.solarSystem.gravityStrength);
+    Matter.Engine.update(sim.physicsEngine.engine, stepMs);
+  }
 
   // ── Update planets ────────────────────────────────────────────────────────
 

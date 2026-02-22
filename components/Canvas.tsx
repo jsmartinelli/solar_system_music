@@ -157,6 +157,10 @@ export default function Canvas({ className = '' }: CanvasProps) {
     if (isAudioReady()) return;
     await initAudioContext();
     setAudioReady(isAudioReady());
+    // Reset the tick timer so the first physics frame after audio init
+    // doesn't accumulate time elapsed during Tone.start() and produce
+    // an oversized deltaMs that destabilises orbits.
+    lastTickRef.current = performance.now();
     // Start the simulation playing once audio is ready
     if (simRef.current) {
       simRef.current = playSimulation(simRef.current);
@@ -172,6 +176,9 @@ export default function Canvas({ className = '' }: CanvasProps) {
         if (simRef.current.solarSystem.isPlaying) {
           simRef.current = pauseSimulation(simRef.current);
         } else {
+          // Reset tick timer on resume to avoid a large deltaMs from
+          // time accumulated while paused, which would destabilise orbits.
+          lastTickRef.current = performance.now();
           simRef.current = playSimulation(simRef.current);
         }
       }

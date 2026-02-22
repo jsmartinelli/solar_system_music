@@ -8,14 +8,30 @@ import type { Vector2D } from '@/types/celestial';
 export const G = 6.674e-4;
 
 /**
+ * The fixed physics timestep in milliseconds.
+ *
+ * Matter.js uses Verlet integration where force contributes to velocity as:
+ *   Δv = (force / mass) * delta_ms²
+ *
+ * Because of this delta² scaling, orbital velocity must be calculated as
+ *   v = sqrt(G * M / r) * PHYSICS_DELTA_MS
+ * so that the gravitational force provides exactly the right centripetal
+ * acceleration each step. This constant must match the delta passed to
+ * Matter.Engine.update() — i.e. the sub-step size used in tickSimulation.
+ */
+export const PHYSICS_DELTA_MS = 1000 / 60; // ~16.67 ms
+
+/**
  * Calculates the orbital velocity needed to maintain a stable circular orbit.
  *
- * From Newtonian gravity: v = sqrt(G * M / r)
+ * Matter.js Verlet integrates force as: Δposition = force/mass * delta_ms²
+ * So the required velocity (in pixels per physics step) is:
+ *   v = sqrt(G * M * gravityStrength / r) * PHYSICS_DELTA_MS
  *
  * @param centralMass - Mass of the body being orbited (e.g., the star)
  * @param orbitRadius - Distance from center of central body
  * @param gravityStrength - Global gravity multiplier (default 1)
- * @returns The scalar orbital speed
+ * @returns The scalar orbital speed in pixels per physics step
  */
 export function circularOrbitSpeed(
   centralMass: number,
@@ -23,7 +39,7 @@ export function circularOrbitSpeed(
   gravityStrength: number = 1
 ): number {
   if (orbitRadius <= 0 || centralMass <= 0) return 0;
-  return Math.sqrt((G * centralMass * gravityStrength) / orbitRadius);
+  return Math.sqrt((G * centralMass * gravityStrength) / orbitRadius) * PHYSICS_DELTA_MS;
 }
 
 /**
