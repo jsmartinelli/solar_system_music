@@ -18,6 +18,8 @@ import {
   addStar,
   addPlanet,
   addSatellite,
+  removePlanet,
+  updatePlanetProperties,
   playSimulation,
   pauseSimulation,
   rewindSimulation,
@@ -27,12 +29,13 @@ import {
   simulationToSceneObjects,
   destroySimulation,
 } from '@/lib/simulation/simulation';
-import type { SimulationState } from '@/lib/simulation/simulation';
+import type { SimulationState, PlanetUpdateOptions } from '@/lib/simulation/simulation';
 import { initAudioContext, isAudioReady } from '@/lib/audio/context';
 import PlacementModal from './PlacementModal';
 import type { PlacementConfirmOptions, StarPlacementOptions, PlanetPlacementOptions } from './PlacementModal';
 import SatelliteModal from './SatelliteModal';
 import type { SatelliteConfirmOptions } from './SatelliteModal';
+import PlanetEditModal from './PlanetEditModal';
 
 interface CanvasProps {
   className?: string;
@@ -127,6 +130,8 @@ export default function Canvas({
     planet: Planet;
     clickWorldPos: Vector2D;
   } | null>(null);
+
+  const [editModal, setEditModal] = useState<Planet | null>(null);
 
   // Two-stage satellite placement:
   // stage 1: satelliteToolActive=true, no planet selected yet (clicking to pick a planet)
@@ -312,8 +317,9 @@ export default function Canvas({
         setSatellitePlanetId(null);
         setSatelliteModal(null);
         setPlacementModal(null);
+        setEditModal(null);
       }
-      if (e.code === 'Space' && simRef.current && !placementModal && !satelliteModal) {
+      if (e.code === 'Space' && simRef.current && !placementModal && !satelliteModal && !editModal) {
         e.preventDefault();
         const newPlaying = !simRef.current.solarSystem.isPlaying;
         if (newPlaying) {
@@ -327,7 +333,7 @@ export default function Canvas({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onIsPlayingChange, onSatelliteToolActiveChange, placementModal, satelliteModal]);
+  }, [onIsPlayingChange, onSatelliteToolActiveChange, placementModal, satelliteModal, editModal]);
 
   // ─── Zoom (wheel) ─────────────────────────────────────────────────────────
   // React attaches wheel listeners as passive by default, so e.preventDefault()
@@ -433,37 +439,43 @@ export default function Canvas({
     setPlacementModal({ entityType: itemType, worldPos });
   }, []);
 
-  // ─── Canvas click (satellite placement) ──────────────────────────────────
+  // ─── Canvas click (planet edit or satellite placement) ───────────────────
 
   const handleCanvasClick = useCallback((e: React.MouseEvent) => {
-    if (!satelliteToolActive || !simRef.current) return;
-    e.stopPropagation();
+    if (!simRef.current) return;
 
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     const screenPos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     const worldPos = screenToWorld(screenPos, viewportRef.current);
 
-    if (!satellitePlanetId) {
-      // Stage 1: pick a planet
-      const hit = hitTestPlanets(worldPos, simRef.current);
-      if (!hit) return; // clicked empty space — do nothing
-
-      setSatellitePlanetId(hit.id);
-      // Zoom toward the clicked planet
-      const planetScreen = worldToScreen(hit.position, viewportRef.current);
-      viewportRef.current = zoomToward(viewportRef.current, 1.5, planetScreen);
-    } else {
-      // Stage 2: place orbit at click position
-      const planet = simRef.current.solarSystem.planets.find(
-        (p) => p.id === satellitePlanetId
-      );
-      if (!planet) {
-        setSatellitePlanetId(null);
-        return;
+    if (satelliteToolActive) {
+      e.stopPropagation();
+      if (!satellitePlanetId) {
+        // Stage 1: pick a planet
+        const hit = hitTestPlanets(worldPos, simRef.current);
+        if (!hit) return;
+        setSatellitePlanetId(hit.id);
+        const planetScreen = worldToScreen(hit.position, viewportRef.current);
+        viewportRef.current = zoomToward(viewportRef.current, 1.5, planetScreen);
+      } else {
+        // Stage 2: place orbit at click position
+        const planet = simRef.current.solarSystem.planets.find(
+          (p) => p.id === satellitePlanetId
+        );
+        if (!planet) { setSatellitePlanetId(null); return; }
+        setSatelliteModal({ planet, clickWorldPos: worldPos });
       }
-      setSatelliteModal({ planet, clickWorldPos: worldPos });
+      return;
     }
+
+    // Normal mode: click a planet to edit it
+    const hit = hitTestPlanets(worldPos, simRef.current);
+    if (!hit) return;
+    if (simRef.current.solarSystem.isPlaying) {
+      simRef.current = pauseSimulation(simRef.current);
+    }
+    setEditModal(hit);
   }, [satelliteToolActive, satellitePlanetId]);
 
   // ─── Placement modal handlers ─────────────────────────────────────────────
@@ -538,6 +550,37 @@ export default function Canvas({
     setSatellitePlanetId(null);
     onSatelliteToolActiveChange(false);
   }, [onSatelliteToolActiveChange]);
+
+  // ─── Planet edit handlers ─────────────────────────────────────────────────
+
+  const handleEditConfirm = useCallback((options: PlanetUpdateOptions) => {
+    if (!editModal || !simRef.current) return;
+    simRef.current = updatePlanetProperties(simRef.current, editModal.id, options);
+    setEditModal(null);
+    if (isPlayingRef.current) {
+      lastTickRef.current = performance.now();
+      simRef.current = playSimulation(simRef.current);
+    }
+  }, [editModal]);
+
+  const handleEditDelete = useCallback(() => {
+    if (!editModal || !simRef.current) return;
+    simRef.current = removePlanet(simRef.current, editModal.id);
+    emitCounts();
+    setEditModal(null);
+    if (isPlayingRef.current) {
+      lastTickRef.current = performance.now();
+      simRef.current = playSimulation(simRef.current);
+    }
+  }, [editModal, emitCounts]);
+
+  const handleEditCancel = useCallback(() => {
+    setEditModal(null);
+    if (isPlayingRef.current && simRef.current && !simRef.current.solarSystem.isPlaying) {
+      lastTickRef.current = performance.now();
+      simRef.current = playSimulation(simRef.current);
+    }
+  }, []);
 
   // ─── Cursor style ─────────────────────────────────────────────────────────
 
@@ -620,6 +663,15 @@ export default function Canvas({
           clickWorldPos={satelliteModal.clickWorldPos}
           onConfirm={handleSatelliteConfirm}
           onCancel={handleSatelliteCancel}
+        />
+      )}
+
+      {editModal && (
+        <PlanetEditModal
+          planet={editModal}
+          onConfirm={handleEditConfirm}
+          onDelete={handleEditDelete}
+          onCancel={handleEditCancel}
         />
       )}
     </div>

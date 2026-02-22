@@ -12,7 +12,7 @@ import type { SynthManager, SynthType } from '@/lib/audio/synthManager';
 import { setBpm } from '@/lib/audio/context';
 import { createStar } from '@/lib/entities/star';
 import type { CreateStarOptions } from '@/lib/entities/star';
-import { createPlanet, updatePlanet, MAX_PLANETS } from '@/lib/entities/planet';
+import { createPlanet, updatePlanet, MAX_PLANETS, setPlanetNoteSequence } from '@/lib/entities/planet';
 import type { CreatePlanetOptions } from '@/lib/entities/planet';
 import { createSatellite, updateSatellite, decayPulse, MAX_SATELLITES } from '@/lib/entities/satellite';
 import type { CreateSatelliteOptions } from '@/lib/entities/satellite';
@@ -112,6 +112,55 @@ export function addPlanet(
     solarSystem: {
       ...sim.solarSystem,
       planets: [...sim.solarSystem.planets, planet],
+    },
+  };
+}
+
+export interface PlanetUpdateOptions {
+  mass?: number;
+  noteSequence?: string;
+  rotationSpeed?: import('@/types/celestial').NoteDuration;
+  synthType?: SynthType;
+  clockwise?: boolean;
+}
+
+/**
+ * Updates editable properties of an existing planet in-place.
+ * If synthType changes, the old Tone.js synth is disposed and a new one created.
+ */
+export function updatePlanetProperties(
+  sim: SimulationState,
+  planetId: string,
+  options: PlanetUpdateOptions
+): SimulationState {
+  const planet = sim.solarSystem.planets.find((p) => p.id === planetId);
+  if (!planet) return sim;
+
+  const { noteSequence, synthType, ...rest } = options;
+
+  // Swap synth if type changed
+  if (synthType !== undefined && synthType !== planet.synthType) {
+    removeSynth(sim.synthManager, planetId);
+    addSynth(sim.synthManager, planetId, synthType as SynthType);
+  }
+
+  // Apply scalar field updates, then re-parse note sequence if provided
+  let updatedPlanet: Planet = {
+    ...planet,
+    ...rest,
+    synthType: synthType ?? planet.synthType,
+  };
+  if (noteSequence !== undefined) {
+    updatedPlanet = setPlanetNoteSequence(updatedPlanet, noteSequence);
+  }
+
+  return {
+    ...sim,
+    solarSystem: {
+      ...sim.solarSystem,
+      planets: sim.solarSystem.planets.map((p) =>
+        p.id === planetId ? updatedPlanet : p
+      ),
     },
   };
 }
