@@ -99,29 +99,29 @@ describe('zoomToward', () => {
   const vp = createViewport(800, 600);
   const center = { x: 400, y: 300 }; // screen center = world origin
 
-  it('increases zoom on positive delta', () => {
-    const vp2 = zoomToward(vp, 0.1, center);
+  it('increases zoom on factor > 1', () => {
+    const vp2 = zoomToward(vp, 1.1, center);
     expect(vp2.zoom).toBeCloseTo(1.1);
   });
 
-  it('decreases zoom on negative delta', () => {
-    const vp2 = zoomToward(vp, -0.2, center);
+  it('decreases zoom on factor < 1', () => {
+    const vp2 = zoomToward(vp, 0.8, center);
     expect(vp2.zoom).toBeCloseTo(0.8);
   });
 
   it('clamps zoom to ZOOM_MIN', () => {
-    const vp2 = zoomToward(vp, -999, center);
+    const vp2 = zoomToward(vp, 0.0001, center);
     expect(vp2.zoom).toBe(ZOOM_MIN);
   });
 
   it('clamps zoom to ZOOM_MAX', () => {
-    const vp2 = zoomToward(vp, 999, center);
+    const vp2 = zoomToward(vp, 99999, center);
     expect(vp2.zoom).toBe(ZOOM_MAX);
   });
 
   it('keeps the focal world point fixed when zooming toward canvas center', () => {
     // When we zoom toward center, pan stays 0 (world origin stays at center)
-    const vp2 = zoomToward(vp, 0.5, center);
+    const vp2 = zoomToward(vp, 1.5, center);
     const worldUnderCenter = screenToWorld(center, vp2);
     expect(worldUnderCenter.x).toBeCloseTo(0, 6);
     expect(worldUnderCenter.y).toBeCloseTo(0, 6);
@@ -130,7 +130,7 @@ describe('zoomToward', () => {
   it('keeps the focal world point fixed when zooming toward an off-center point', () => {
     const focal = { x: 500, y: 200 };
     const worldBefore = screenToWorld(focal, vp);
-    const vp2 = zoomToward(vp, 0.3, focal);
+    const vp2 = zoomToward(vp, 1.3, focal);
     const worldAfter = screenToWorld(focal, vp2);
     expect(worldAfter.x).toBeCloseTo(worldBefore.x, 5);
     expect(worldAfter.y).toBeCloseTo(worldBefore.y, 5);
@@ -138,7 +138,7 @@ describe('zoomToward', () => {
 
   it('returns same viewport when zoom is already at limit', () => {
     const atMax = { ...vp, zoom: ZOOM_MAX };
-    expect(zoomToward(atMax, 1, center)).toBe(atMax);
+    expect(zoomToward(atMax, 2, center)).toBe(atMax);
   });
 });
 

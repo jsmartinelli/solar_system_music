@@ -62,22 +62,22 @@ export function worldScaleToScreen(
 }
 
 /**
- * Zooms the viewport toward a screen-space focal point (e.g. mouse position).
- * The world point under the cursor stays fixed after zooming.
+ * Zooms the viewport toward a screen-space focal point using a multiplicative
+ * factor. The world point under the cursor stays fixed after zooming.
  *
  * @param viewport - Current viewport state
- * @param delta - Positive = zoom in, negative = zoom out
+ * @param factor - Multiplier applied to current zoom (>1 = zoom in, <1 = zoom out)
  * @param focalScreen - Screen-space point to zoom toward
  * @returns New viewport state
  */
 export function zoomToward(
   viewport: ViewportState,
-  delta: number,
+  factor: number,
   focalScreen: Vector2D
 ): ViewportState {
   const newZoom = Math.max(
     ZOOM_MIN,
-    Math.min(ZOOM_MAX, viewport.zoom + delta)
+    Math.min(ZOOM_MAX, viewport.zoom * factor)
   );
 
   if (newZoom === viewport.zoom) return viewport;

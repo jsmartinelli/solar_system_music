@@ -330,13 +330,36 @@ export default function Canvas({
   }, [onIsPlayingChange, onSatelliteToolActiveChange, placementModal, satelliteModal]);
 
   // ─── Zoom (wheel) ─────────────────────────────────────────────────────────
+  // React attaches wheel listeners as passive by default, so e.preventDefault()
+  // inside a React onWheel handler is ignored and the browser still scrolls/zooms
+  // the page. We attach a native non-passive listener directly to the canvas element
+  // so preventDefault() actually works.
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    const rect = canvasRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const focal = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    viewportRef.current = zoomToward(viewportRef.current, -e.deltaY * 0.001, focal);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const focal = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+
+      // Normalise deltaY to pixels regardless of deltaMode:
+      //   mode 0 = pixels (trackpad), mode 1 = lines (~16px each), mode 2 = pages
+      const LINE_HEIGHT = 16;
+      const PAGE_HEIGHT = rect.height || 600;
+      const deltaPixels =
+        e.deltaMode === 2 ? e.deltaY * PAGE_HEIGHT :
+        e.deltaMode === 1 ? e.deltaY * LINE_HEIGHT :
+        e.deltaY;
+
+      // Multiplicative factor: 300px of scroll = one doubling/halving
+      const factor = Math.pow(2, -deltaPixels / 300);
+      viewportRef.current = zoomToward(viewportRef.current, factor, focal);
+    };
+
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
   }, []);
 
   // ─── Pan (mouse drag) ─────────────────────────────────────────────────────
@@ -533,7 +556,6 @@ export default function Canvas({
         className={`block ${cursorClass}`}
         data-testid="canvas"
         style={{ touchAction: 'none' }}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
